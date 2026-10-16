@@ -43,6 +43,8 @@ The app polls window titles every 1 second and detects when a ticker changes.
 
 ## Quick Start (No coding experience needed)
 
+> **New to coding?** You can skip all the steps below — just install [Claude Code](https://claude.ai/download), [Cursor](https://cursor.com/), or [Windsurf](https://windsurf.com/) in your code editor, open the project folder, and tell it *"set up and run this app."* It will read this README and handle everything for you.
+
 ### 1. Install Python
 
 Download Python from [python.org/downloads](https://www.python.org/downloads/) and install it.
@@ -94,6 +96,16 @@ python das_monitor.py
 ```
 
 </details>
+
+## Troubleshooting
+
+If you prefer to set things up manually, watch out for these common issues:
+
+- **Python not installed** — If you type `python --version` in your terminal and get an error, you need to install it from [python.org](https://www.python.org/downloads/). Make sure to check **"Add Python to PATH"** during installation.
+- **Git not installed** (command line setup only) — You need [Git](https://git-scm.com/) to clone the repo. Downloading the ZIP is not the same thing. If you used the ZIP/`setup.bat` approach above, you don't need Git.
+- **Missing dependencies** — After cloning or extracting, run `pip install -r requirements.txt` in the project folder. Even if some packages are already installed on your machine, run it anyway to be safe.
+- **`.env` formatting** — Your `.env` file should have your API key with no spaces and no quotes around the value: `ASKEDGAR_API_KEY=ask-live-yourkey`
+- **Still stuck?** Don't guess — connect an AI assistant (Claude Code, Cursor, Windsurf) to the project folder and ask it to help. This README has everything it needs to guide you.
 
 ## How to Customize (Vibe Coding)
 
