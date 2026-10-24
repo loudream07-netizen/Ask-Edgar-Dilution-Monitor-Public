@@ -140,24 +140,11 @@ Or just double-click `run.bat` again.
 |---|---|---|
 | **Window size/position** | `geometry("480x620+50+50")` | "Make the overlay 600px wide" |
 | **Colors** | Color constants at the top | "Change the background to navy blue" |
-| **Poll speed** | `POLL_INTERVAL = 1.0` | "Check for ticker changes every 0.5 seconds" |
 | **News count** | `fetch_news_and_grok` | "Show 5 news headlines instead of 2" |
-| **Platform support** | `find_montage_windows` | "Add support for Interactive Brokers TWS" |
-
-### Adding support for other trading platforms
-
-Ask your AI assistant something like:
-
-> "Add support for [platform name] — it needs to detect the active ticker from the window title"
-
-The AI will need to know how your platform formats its window titles. You can find out by asking:
-
-> "Print all visible window titles on my screen so I can find my trading platform"
 
 ## Tech Stack
 
 - **Python 3.10+** with tkinter (built-in GUI)
-- **win32gui** (pywin32) for Windows window enumeration
 - **requests** for API calls
 - **python-dotenv** for loading `.env` files
 
