@@ -1,18 +1,15 @@
 """
-DAS Trader Montage Monitor + Ask Edgar Dilution Overlay
+Manual Ticker Ask Edgar Dilution Overlay
 -------------------------------------------------------
-Monitors the active DAS Trader montage window for ticker changes,
-fetches dilution risk data from the Ask Edgar API, and displays
+Lets you enter a ticker manually, fetches dilution risk data from the Ask Edgar API, and displays
 results in an always-on-top overlay panel.
 """
 
 import os
 import threading
-import time
 import webbrowser
 import requests
 import tkinter as tk
-import win32gui
 import re
 
 # Load .env file if python-dotenv is installed
@@ -41,7 +38,6 @@ DILDATA_API_URL = "https://eapi.askedgar.io/enterprise/v1/dilution-data"
 DILDATA_API_KEY = ASKEDGAR_API_KEY
 SCREENER_API_URL = "https://eapi.askedgar.io/v1/screener"
 SCREENER_API_KEY = ASKEDGAR_API_KEY
-POLL_INTERVAL = 1.0
 
 # ── Visual Style ────────────────────────────────────────────────────────────
 BG = "#0D1014"
@@ -82,45 +78,6 @@ def fmt_millions(val) -> str:
     if m >= 1:
         return f"{m:.2f}M"
     return f"{val / 1000:.0f}K"
-
-
-# ── Window Monitor ──────────────────────────────────────────────────────────
-def find_montage_windows() -> dict[int, str]:
-    """Return {hwnd: ticker} for all visible DAS montage and chart windows."""
-    windows = {}
-
-    def enum_callback(hwnd, _):
-        if not win32gui.IsWindowVisible(hwnd):
-            return
-        title = win32gui.GetWindowText(hwnd)
-        # DAS montage: "TICKER     0 -- 0     Company Name..."
-        if re.match(r'^[A-Z]{1,5}\s+\d', title):
-            windows[hwnd] = title.split()[0]
-        # DAS chart: "TICKER--5 Minute--"
-        elif re.match(r'^[A-Z]{1,5}--', title):
-            windows[hwnd] = title.split('--')[0]
-
-    win32gui.EnumWindows(enum_callback, None)
-    return windows
-
-
-def find_tos_tickers() -> dict[int, list[str]]:
-    """Return {hwnd: [tickers]} for thinkorswim chart windows."""
-    windows = {}
-
-    def enum_callback(hwnd, _):
-        if not win32gui.IsWindowVisible(hwnd):
-            return
-        title = win32gui.GetWindowText(hwnd)
-        # "PRSO, MOBX, TURB - Charts - 61612650SCHW Main@thinkorswim [build 1990]"
-        if "thinkorswim" in title and " - Charts - " in title:
-            ticker_part = title.split(" - Charts - ")[0]
-            tickers = [t.strip() for t in ticker_part.split(",") if t.strip()]
-            if tickers:
-                windows[hwnd] = tickers
-
-    win32gui.EnumWindows(enum_callback, None)
-    return windows
 
 
 # ── Ask Edgar APIs ──────────────────────────────────────────────────────────
@@ -293,10 +250,7 @@ class DilutionOverlay:
 
         self._drag_data = {"x": 0, "y": 0}
         self.current_ticker = None
-        self._known_windows: dict[int, str] = {}  # DAS: hwnd -> ticker
-        self._known_tos: dict[int, list[str]] = {}  # ToS: hwnd -> [tickers]
         self._build_ui()
-        self._start_monitor()
 
     def _build_ui(self):
         # ── Header card (draggable) ──
@@ -328,6 +282,26 @@ class DilutionOverlay:
             font=FONT_UI, anchor="w",
         )
         self.info_label.pack(fill="x", padx=14, pady=(0, 10))
+
+        # ── Manual ticker entry ──
+        ticker_bar = tk.Frame(self.root, bg=BG_CARD,
+                              highlightbackground=BORDER, highlightthickness=1)
+        ticker_bar.pack(fill="x", padx=8, pady=(6, 0))
+        tk.Label(ticker_bar, text="TICKER", fg=FG_DIM, bg=BG_CARD,
+                 font=FONT_UI_BOLD).pack(side="left", padx=(12, 8), pady=10)
+        self.ticker_entry = tk.Entry(
+            ticker_bar, bg=BG_ROW, fg=FG, insertbackground=FG,
+            relief="flat", font=FONT_MONO_BOLD, width=12,
+        )
+        self.ticker_entry.pack(side="left", fill="x", expand=True, padx=(0, 8), pady=7, ipady=5)
+        self.ticker_entry.bind("<Return>", self._submit_ticker)
+        self.analyze_button = tk.Button(
+            ticker_bar, text="Analyze", command=self._submit_ticker,
+            bg="#1678A5", fg="white", activebackground="#1B91C4",
+            activeforeground="white", relief="flat", font=FONT_UI_BOLD,
+            padx=12, pady=5, cursor="hand2",
+        )
+        self.analyze_button.pack(side="right", padx=(0, 8), pady=7)
 
         # ── Scrollable content ──
         container = tk.Frame(self.root, bg=BG)
@@ -367,7 +341,7 @@ class DilutionOverlay:
         self._clear()
         tk.Label(
             self.content_frame,
-            text="Load a ticker in DAS or thinkorswim\nto see dilution data here.",
+            text="Enter a ticker above and click Analyze\nto load dilution research.",
             fg="#4A525C", bg=BG, font=("Segoe UI", 12), justify="center",
         ).pack(pady=60)
 
@@ -734,48 +708,20 @@ class DilutionOverlay:
         y = self.root.winfo_y() + dy
         self.root.geometry(f"+{x}+{y}")
 
-    # ── Monitor thread ──
-    def _start_monitor(self):
-        def poll():
-            while True:
-                changed_ticker = None
-
-                # ── DAS montage windows ──
-                current = find_montage_windows()  # {hwnd: ticker}
-                for hwnd, ticker in current.items():
-                    old_ticker = self._known_windows.get(hwnd)
-                    if old_ticker is not None and ticker != old_ticker:
-                        changed_ticker = ticker
-                        break
-                if changed_ticker is None:
-                    new_hwnds = set(current) - set(self._known_windows)
-                    for hwnd in new_hwnds:
-                        changed_ticker = current[hwnd]
-                        break
-                self._known_windows = current
-
-                # ── thinkorswim chart windows ──
-                if changed_ticker is None:
-                    tos_current = find_tos_tickers()  # {hwnd: [tickers]}
-                    for hwnd, tickers in tos_current.items():
-                        old_tickers = self._known_tos.get(hwnd, [])
-                        new_syms = [t for t in tickers if t not in old_tickers]
-                        if new_syms:
-                            changed_ticker = new_syms[0]
-                            break
-                    if changed_ticker is None:
-                        new_hwnds = set(tos_current) - set(self._known_tos)
-                        for hwnd in new_hwnds:
-                            changed_ticker = tos_current[hwnd][0]
-                            break
-                    self._known_tos = tos_current
-
-                if changed_ticker:
-                    self.current_ticker = changed_ticker
-                    self.root.after(0, self._on_ticker_change, changed_ticker)
-                time.sleep(POLL_INTERVAL)
-
-        threading.Thread(target=poll, daemon=True).start()
+    # ── Manual ticker input ──
+    def _submit_ticker(self, event=None):
+        ticker = self.ticker_entry.get().strip().upper()
+        if not ticker:
+            self.ticker_entry.focus_set()
+            return
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,9}", ticker):
+            self.info_label.config(text="Enter a valid ticker symbol (letters, numbers, . or -).")
+            self.ticker_entry.focus_set()
+            return
+        self.ticker_entry.delete(0, tk.END)
+        self.ticker_entry.insert(0, ticker)
+        self.current_ticker = ticker
+        self._on_ticker_change(ticker)
 
     def _on_ticker_change(self, ticker: str):
         self._show_loading(ticker)
