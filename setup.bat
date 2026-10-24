@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo  Ask Edgar Dilution Monitor - Setup
+echo  Ask Edgar Manual Ticker Monitor - Setup
 echo ============================================
 echo.
 
