@@ -857,7 +857,7 @@ class DilutionOverlay:
 
     def _add_current_to_watchlist(self):
         ticker = (self.ticker_entry.get().strip() or self.current_ticker or "").upper()
-        if not re.fullmatch(r"[A-Z0-9][A-Z0-9.\\-]{0,9}", ticker):
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,9}", ticker):
             messagebox.showinfo("Watchlist", "Introduce o analiza primero un ticker válido.")
             return
         self.watchlist[ticker] = self.latest_snapshots.get(ticker, {"ticker": ticker})
