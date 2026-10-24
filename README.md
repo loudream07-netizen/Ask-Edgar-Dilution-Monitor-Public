@@ -12,6 +12,13 @@ Enter a ticker symbol and click **Analyze** (or press Enter) to fetch:
 - **In-play dilution** – Active warrants and convertibles near current price, color-coded by risk
 - **JMT415 analyst notes** – Recent analyst commentary
 - **Management commentary** – From Ask Edgar's dilution analysis
+- **Quick research profile** – Key dilution ratings, float, shares outstanding, market cap, sector, and country
+- **Watchlist and comparison** – Save tickers locally, reopen them, remove them, and compare saved research snapshots
+- **Risk and catalyst signals** – Highlight elevated offering risk, pending registration mentions, offering capacity, warrants/convertibles, and recent 8-K/6-K items for manual verification
+- **Market context** – Show price, change, volume, average volume, and relative volume when returned by the screener API
+
+The watchlist is stored in a local `watchlist.json` file beside the app. Market fields depend on what the API returns; missing fields are not estimated. Automated risk/catalyst flags are research prompts and should be checked against the linked source documents.
+
 
 ## What It Looks Like
 
