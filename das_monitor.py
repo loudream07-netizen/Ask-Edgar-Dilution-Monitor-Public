@@ -6,10 +6,12 @@ results in an always-on-top overlay panel.
 """
 
 import os
+import json
 import threading
 import webbrowser
 import requests
 import tkinter as tk
+from tkinter import messagebox
 import re
 
 # Load .env file if python-dotenv is installed
@@ -150,8 +152,8 @@ def fetch_news_and_grok(ticker: str) -> tuple[list[dict], str | None, str | None
     return headlines, grok_line, grok_date, grok_url, jmt415_notes
 
 
-def fetch_last_price(ticker: str) -> float | None:
-    """Fetch last price via Ask Edgar screener endpoint."""
+def fetch_market_data(ticker: str) -> dict:
+    """Return the screener record; available market fields depend on the API response."""
     try:
         resp = requests.get(
             SCREENER_API_URL,
@@ -159,18 +161,27 @@ def fetch_last_price(ticker: str) -> float | None:
             params={"ticker": ticker, "limit": 1},
             timeout=10,
         )
+        resp.raise_for_status()
         data = resp.json()
         if data.get("status") == "success" and data.get("results"):
-            return data["results"][0].get("price")
+            return data["results"][0] or {}
     except Exception as e:
-        print(f"Price API error for {ticker}: {e}")
-    return None
+        print(f"Market-data API error for {ticker}: {e}")
+    return {}
 
 
-def fetch_in_play_dilution(ticker: str) -> tuple[list[dict], list[dict], float]:
-    """Fetch dilution-data and split into in-play warrants and convertibles.
-    Returns (warrants, convertibles, stock_price) filtered by price proximity and registration."""
-    price = fetch_last_price(ticker)
+def fetch_last_price(ticker: str) -> float | None:
+    """Fetch last price via Ask Edgar screener endpoint."""
+    value = fetch_market_data(ticker).get("price")
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_in_play_dilution(ticker: str, price_override: float | None = None) -> tuple[list[dict], list[dict], float]:
+    """Fetch in-play warrants and convertibles, reusing a price already fetched when available."""
+    price = price_override if price_override is not None else fetch_last_price(ticker)
     if price is None or price <= 0:
         return [], [], 0.0
 
@@ -250,6 +261,9 @@ class DilutionOverlay:
 
         self._drag_data = {"x": 0, "y": 0}
         self.current_ticker = None
+        self.watchlist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watchlist.json")
+        self.watchlist = self._load_watchlist()
+        self.latest_snapshots = {}
         self._build_ui()
 
     def _build_ui(self):
@@ -302,6 +316,18 @@ class DilutionOverlay:
             padx=12, pady=5, cursor="hand2",
         )
         self.analyze_button.pack(side="right", padx=(0, 8), pady=7)
+        tk.Button(
+            ticker_bar, text="Add", command=self._add_current_to_watchlist,
+            bg="#2F7D57", fg="white", activebackground="#399768",
+            activeforeground="white", relief="flat", font=FONT_UI_BOLD,
+            padx=9, pady=5, cursor="hand2",
+        ).pack(side="right", padx=(0, 6), pady=7)
+        tk.Button(
+            ticker_bar, text="Watchlist", command=self._open_watchlist,
+            bg="#303B49", fg=FG, activebackground="#435267",
+            activeforeground=FG, relief="flat", font=FONT_UI_BOLD,
+            padx=9, pady=5, cursor="hand2",
+        ).pack(side="right", padx=(0, 6), pady=7)
 
         # ── Scrollable content ──
         container = tk.Frame(self.root, bg=BG)
@@ -385,8 +411,14 @@ class DilutionOverlay:
                    in_play_warrants: list[dict] | None = None,
                    in_play_converts: list[dict] | None = None,
                    stock_price: float = 0.0,
-                   jmt415_notes: list[dict] | None = None):
+                   jmt415_notes: list[dict] | None = None,
+                   market_data: dict | None = None):
         self._clear()
+        market_data = market_data or {}
+        self.latest_snapshots[ticker] = self._make_snapshot(ticker, dilution, floatdata, market_data, in_play_warrants or [], in_play_converts or [])
+        if ticker in self.watchlist:
+            self.watchlist[ticker] = self.latest_snapshots[ticker]
+            self._save_watchlist()
 
         risk = dilution.get("overall_offering_risk", "N/A")
         self.overall_badge.config(text=f"RISK: {risk}", bg=risk_bg(risk))
@@ -403,6 +435,55 @@ class DilutionOverlay:
             )
         else:
             self.info_label.config(text="")
+
+        # ── Quick research profile ──
+        quick_card = self._make_card(self.content_frame, title="Quick Profile")
+        quick_body = tk.Frame(quick_card, bg=BG_CARD, padx=14, pady=10)
+        quick_body.pack(fill="x")
+        quick_lines = [
+            ("Price", self._format_market_value(market_data, ("price", "last_price"), "$")),
+            ("Float", fmt_millions(floatdata.get("float")) if floatdata else "N/A"),
+            ("Shares outstanding", fmt_millions(floatdata.get("outstanding")) if floatdata else "N/A"),
+            ("Market cap", fmt_millions(floatdata.get("market_cap_final")) if floatdata else self._format_market_value(market_data, ("market_cap", "market_capitalization"), "$")),
+            ("Sector / Country", " / ".join(str(x) for x in ((floatdata or {}).get("sector"), (floatdata or {}).get("country")) if x) or "N/A"),
+        ]
+        for label, value in quick_lines:
+            tk.Label(quick_body, text=f"{label}: {value}", fg=FG, bg=BG_CARD,
+                     font=FONT_UI, anchor="w").pack(fill="x", pady=1)
+
+        # ── Market context ──
+        market_lines = [
+            ("Price", self._format_market_value(market_data, ("price", "last_price"), "$")),
+            ("Change", self._format_market_value(market_data, ("change_percent", "percent_change", "change_pct", "changesPercentage"), suffix="%")),
+            ("Volume", self._format_market_value(market_data, ("volume", "latest_volume"))),
+            ("Avg. volume", self._format_market_value(market_data, ("average_volume", "avg_volume", "averageVolume"))),
+            ("Relative volume", self._format_market_value(market_data, ("relative_volume", "relativeVolume", "rel_volume"), suffix="x")),
+        ]
+        available_market = [(k, v) for k, v in market_lines if v != "N/A"]
+        if available_market:
+            market_card = self._make_card(self.content_frame, title="Market Context")
+            market_body = tk.Frame(market_card, bg=BG_CARD, padx=14, pady=10)
+            market_body.pack(fill="x")
+            for label, value in available_market:
+                tk.Label(market_body, text=f"{label}: {value}", fg=FG, bg=BG_CARD,
+                         font=FONT_UI, anchor="w").pack(fill="x", pady=1)
+            tk.Label(market_body, text="Solo se muestran campos devueltos por la API; no se estiman datos ausentes.",
+                     fg=FG_DIM, bg=BG_CARD, font=("Segoe UI", 8), anchor="w").pack(fill="x", pady=(5, 0))
+
+        # ── Risk and catalyst signals ──
+        signals = self._detect_signals(dilution, news or [], in_play_warrants or [], in_play_converts or [])
+        if signals:
+            signal_card = self._make_card(self.content_frame, title="Risk & Catalyst Signals")
+            signal_body = tk.Frame(signal_card, bg=BG_CARD, padx=14, pady=10)
+            signal_body.pack(fill="x")
+            for signal, severity, detail in signals:
+                color = "#FF6666" if severity == "HIGH" else "#FFB454" if severity == "WATCH" else ACCENT
+                tk.Label(signal_body, text=f"[{severity}] {signal}", fg=color, bg=BG_CARD,
+                         font=FONT_UI_BOLD, anchor="w", justify="left", wraplength=390).pack(fill="x", pady=(2, 0))
+                tk.Label(signal_body, text=detail, fg=FG_DIM, bg=BG_CARD,
+                         font=FONT_UI, anchor="w", justify="left", wraplength=390).pack(fill="x", pady=(0, 4))
+            tk.Label(signal_body, text="Indicadores automáticos para revisar; no constituyen confirmación de un evento ni recomendación financiera.",
+                     fg=FG_DIM, bg=BG_CARD, font=("Segoe UI", 8), anchor="w", wraplength=390, justify="left").pack(fill="x", pady=(4, 0))
 
         # ── Feed card (news + grok) ──
         has_feed = news or grok_line
@@ -696,6 +777,143 @@ class DilutionOverlay:
             for child in (row, inner, data_row, *inner.winfo_children(), *data_row.winfo_children()):
                 _bind_click(child, url)
 
+    # ── Watchlist and research helpers ──
+    def _load_watchlist(self):
+        try:
+            with open(self.watchlist_path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _save_watchlist(self):
+        try:
+            with open(self.watchlist_path, "w", encoding="utf-8") as handle:
+                json.dump(self.watchlist, handle, indent=2, ensure_ascii=False)
+        except OSError as exc:
+            messagebox.showerror("Watchlist", f"No se pudo guardar watchlist.json:\n{exc}")
+
+    @staticmethod
+    def _format_market_value(data, keys, prefix="", suffix=""):
+        for key in keys:
+            value = data.get(key) if isinstance(data, dict) else None
+            if value is not None and value != "":
+                try:
+                    number = float(value)
+                    if prefix == "$":
+                        return f"${number:,.2f}"
+                    if suffix == "%":
+                        return f"{number:+.2f}%"
+                    if suffix == "x":
+                        return f"{number:.2f}x"
+                    if number >= 1_000_000:
+                        return f"{number / 1_000_000:.2f}M"
+                    if number >= 1_000:
+                        return f"{number:,.0f}"
+                    return f"{number:g}"
+                except (TypeError, ValueError):
+                    return str(value)
+        return "N/A"
+
+    @staticmethod
+    def _make_snapshot(ticker, dilution, floatdata, market_data, warrants, converts):
+        return {
+            "ticker": ticker,
+            "risk": dilution.get("overall_offering_risk", "N/A"),
+            "offering": dilution.get("offering_ability", "N/A"),
+            "dilution": dilution.get("dilution", "N/A"),
+            "float": floatdata.get("float") if floatdata else None,
+            "outstanding": floatdata.get("outstanding") if floatdata else None,
+            "market_cap": (floatdata.get("market_cap_final") if floatdata else None),
+            "price": market_data.get("price"),
+            "warrants_count": len(warrants),
+            "convertibles_count": len(converts),
+        }
+
+    @staticmethod
+    def _detect_signals(dilution, news, warrants, converts):
+        signals = []
+        risk = str(dilution.get("overall_offering_risk", "")).lower()
+        if risk == "high":
+            signals.append(("Overall offering risk is High", "HIGH", "La clasificación de riesgo de Ask Edgar indica riesgo alto."))
+        elif risk == "medium":
+            signals.append(("Overall offering risk is Medium", "WATCH", "Revisar la ficha y los documentos fuente antes de decidir."))
+        desc = str(dilution.get("offering_ability_desc") or "")
+        desc_lower = desc.lower()
+        if any(term in desc_lower for term in ("pending s-1", "pending f-1", "pending s-3", "pending f-3")):
+            signals.append(("Pending registration mentioned", "HIGH", "La descripción de capacidad de emisión menciona un registro pendiente; comprobar el estado del filing."))
+        if any(term in desc_lower for term in ("atm capacity", "equity line capacity", "shelf capacity")):
+            signals.append(("Offering capacity mentioned", "WATCH", "Se menciona capacidad de emisión (ATM, equity line o shelf); confirmar disponibilidad y saldo en la fuente."))
+        if warrants:
+            signals.append((f"{len(warrants)} in-play warrant record(s)", "WATCH", "Revisar precio de ejercicio, acciones restantes, registro y fecha del documento."))
+        if converts:
+            signals.append((f"{len(converts)} in-play convertible record(s)", "WATCH", "Revisar precio de conversión, acciones subyacentes restantes y condiciones."))
+        filings = [str(item.get("form_type", "")).upper() for item in news]
+        if any(form in ("8-K", "6-K") for form in filings):
+            signals.append(("Recent 8-K / 6-K filing in feed", "INFO", "Abrir el documento enlazado para confirmar el contenido y su posible impacto."))
+        if news:
+            signals.append(("Recent news available", "INFO", "Revisar titular, fecha y fuente; la presencia de noticias no implica por sí sola un catalizador positivo o negativo."))
+        return signals
+
+    def _add_current_to_watchlist(self):
+        ticker = (self.ticker_entry.get().strip() or self.current_ticker or "").upper()
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9.\\-]{0,9}", ticker):
+            messagebox.showinfo("Watchlist", "Introduce o analiza primero un ticker válido.")
+            return
+        self.watchlist[ticker] = self.latest_snapshots.get(ticker, {"ticker": ticker})
+        self._save_watchlist()
+        self.info_label.config(text=f"{ticker} guardado en Watchlist.")
+
+    def _open_watchlist(self):
+        window = tk.Toplevel(self.root)
+        window.title("Ask Edgar - Watchlist")
+        window.configure(bg=BG)
+        window.geometry("500x420")
+        tk.Label(window, text="Watchlist · selecciona uno o varios tickers", fg=FG,
+                 bg=BG, font=FONT_HEADER).pack(anchor="w", padx=12, pady=(12, 6))
+        listbox = tk.Listbox(window, selectmode=tk.EXTENDED, bg=BG_ROW, fg=FG,
+                             selectbackground="#1678A5", relief="flat", font=FONT_MONO, height=12)
+        listbox.pack(fill="both", expand=True, padx=12, pady=6)
+        tickers = sorted(self.watchlist)
+        for ticker in tickers:
+            snap = self.watchlist.get(ticker, {})
+            risk = snap.get("risk", "Not analyzed")
+            listbox.insert(tk.END, f"{ticker}  |  Risk: {risk}")
+        def selected():
+            return [tickers[i] for i in listbox.curselection()]
+        actions = tk.Frame(window, bg=BG)
+        actions.pack(fill="x", padx=12, pady=10)
+        def analyze_selected():
+            values = selected()
+            if values:
+                self.ticker_entry.delete(0, tk.END)
+                self.ticker_entry.insert(0, values[0])
+                self._submit_ticker()
+                window.destroy()
+        def compare_selected():
+            values = selected()
+            if len(values) < 2:
+                messagebox.showinfo("Compare", "Selecciona al menos dos tickers.")
+                return
+            rows = []
+            for ticker in values:
+                snap = self.watchlist.get(ticker, {})
+                rows.append(f"{ticker}: Risk={snap.get('risk', 'N/A')} | Dilution={snap.get('dilution', 'N/A')} | Float={snap.get('float', 'N/A')} | Price={snap.get('price', 'N/A')} | Warrants={snap.get('warrants_count', 0)} | Convertibles={snap.get('convertibles_count', 0)}")
+            messagebox.showinfo("Ticker comparison", "\n".join(rows))
+        def remove_selected():
+            values = selected()
+            for ticker in values:
+                self.watchlist.pop(ticker, None)
+            self._save_watchlist()
+            window.destroy()
+            self._open_watchlist()
+        tk.Button(actions, text="Analyze", command=analyze_selected, bg="#1678A5", fg="white",
+                  relief="flat", padx=10, pady=6).pack(side="left", padx=(0, 6))
+        tk.Button(actions, text="Compare", command=compare_selected, bg="#303B49", fg=FG,
+                  relief="flat", padx=10, pady=6).pack(side="left", padx=6)
+        tk.Button(actions, text="Remove", command=remove_selected, bg="#7D3030", fg="white",
+                  relief="flat", padx=10, pady=6).pack(side="left", padx=6)
+
     # ── Dragging ──
     def _start_drag(self, event):
         self._drag_data["x"] = event.x
@@ -729,12 +947,18 @@ class DilutionOverlay:
         def fetch():
             dilution = fetch_dilution_data(ticker)
             floatdata = fetch_float_data(ticker)
+            market_data = fetch_market_data(ticker)
             news, grok_line, grok_date, grok_url, jmt415_notes = fetch_news_and_grok(ticker)
-            warrants, converts, stock_price = fetch_in_play_dilution(ticker)
+            try:
+                price_value = market_data.get("price")
+                price_override = float(price_value) if price_value is not None else None
+            except (TypeError, ValueError):
+                price_override = None
+            warrants, converts, stock_price = fetch_in_play_dilution(ticker, price_override)
             if dilution:
                 self.root.after(0, self._show_data, ticker, dilution, floatdata,
                                 news, grok_line, grok_date, grok_url, warrants, converts, stock_price,
-                                jmt415_notes)
+                                jmt415_notes, market_data)
             else:
                 self.root.after(0, self._show_no_data, ticker)
 
