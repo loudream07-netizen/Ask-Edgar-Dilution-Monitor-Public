@@ -1,8 +1,8 @@
 # Ask Edgar Dilution Monitor
 
-A real-time desktop overlay that monitors your trading platform for ticker changes and instantly displays dilution risk data from [Ask Edgar](https://askedgar.io).
+A desktop research overlay that lets you enter any ticker manually and displays dilution risk data from [Ask Edgar](https://askedgar.io).
 
-When you switch tickers in DAS Trader Pro or thinkorswim, the overlay automatically fetches and shows:
+Enter a ticker symbol and click **Analyze** (or press Enter) to fetch:
 
 - **Dilution risk ratings** – Overall risk, offering ability, dilution level, frequency, cash need, warrants
 - **Float & outstanding shares** – With market cap, sector, and country
@@ -15,7 +15,7 @@ When you switch tickers in DAS Trader Pro or thinkorswim, the overlay automatica
 
 ## What It Looks Like
 
-The app runs as a dark-themed, always-on-top overlay panel. It sits alongside your trading platform and updates automatically as you click through tickers.
+The app runs as a dark-themed, always-on-top overlay panel. Tickers are entered directly in the app; no trading platform needs to be installed or running.
 
 - Risk badges are color-coded: **red** (high), **orange** (medium), **green** (low)
 - News items have colored stripes: **cyan** (news), **orange** (8-K/6-K), **purple** (grok)
@@ -27,19 +27,12 @@ The app runs as a dark-themed, always-on-top overlay panel. It sits alongside yo
 
 | Requirement | Details |
 |---|---|
-| **OS** | Windows only (uses `win32gui` for window detection) |
+| **OS** | Windows |
 | **Python** | 3.10+ |
-| **Trading Platforms** | DAS Trader Pro, thinkorswim (TD Ameritrade / Charles Schwab) |
-| **API Access** | [Ask Edgar](https://askedgar.io) API trial key |
+| **Ticker input** | Manual entry in the app |
+| **API Access** | [Ask Edgar](https://askedgar.io) API key |
 
-### How Platform Detection Works
-
-- **DAS Trader Pro**: Monitors montage windows (`TICKER     0 -- 0     Company Name...`) and chart windows (`TICKER--5 Minute--`). Any ticker change in any montage or chart window triggers the overlay.
-- **thinkorswim**: Monitors detached chart windows (`PRSO, MOBX, TURB - Charts - ...`). When a new ticker is entered in a chart tab, the overlay picks it up.
-
-The app polls window titles every 1 second and detects when a ticker changes.
-
-**ToS limitations**: Only *detached* chart windows are detected — charts embedded in the main ToS window (`Main@thinkorswim`) don't expose the active ticker in their window title. Switching between existing chart tabs also won't trigger a change since all tab tickers are always listed in the title. For best results with ToS, use detached chart windows and enter new tickers rather than clicking existing tabs.
+The app no longer detects DAS Trader Pro or thinkorswim windows. You can use it independently and enter ticker symbols yourself.
 
 ## Quick Start (No coding experience needed)
 
@@ -77,7 +70,7 @@ ASKEDGAR_API_KEY=paste_your_key_here
 
 **Double-click `run.bat`** to start the overlay.
 
-Open DAS Trader Pro or thinkorswim alongside it. Click on a ticker and the data loads automatically.
+Enter a ticker in the **TICKER** field, then click **Analyze** or press Enter. The research panels load for that symbol.
 
 To stop the app, just close the overlay window (click the X) or close the command prompt window that opened with it.
 
